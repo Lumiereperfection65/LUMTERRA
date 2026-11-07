@@ -1,35 +1,65 @@
-# LUMTERRA
+# LUMTERRA — Terre de lumière
 
-Application mobile de signalement citoyen (React Native · Expo · TypeScript · Expo Router · Supabase).
+Application web de signalement citoyen construite avec React, Vite, TypeScript, Supabase et PostgreSQL.
 
-## 1. Installation
+## Prérequis
+
+- Node.js 22 ou plus récent
+- npm
+- Un projet Supabase pour l’authentification, les données et le stockage de photos
+- Facultatif : une clé Gemini pour l’analyse de photos (serveur uniquement)
+
+## Installation et configuration
+
 ```bash
 npm install
-npx expo-doctor             # vérifie la compatibilité
-npm run typecheck           # tsc --noEmit
 ```
 
-## 2. Configuration Supabase
-1. Créez un projet sur https://supabase.com et attendez la fin de son initialisation.
-2. Dans **SQL Editor**, exécutez le contenu de `supabase/schema.sql`. Cela crée `profiles`, `reports`, les politiques RLS et le bucket `report-photos`.
-3. Dans **Project Settings → API**, récupérez :
-   - **Project URL** → `EXPO_PUBLIC_SUPABASE_URL`
-   - **anon / public key** → `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Une clé **publishable** (`sb_publishable_...`) convient également.
-4. Copiez `.env.example` vers `.env` (PowerShell : `Copy-Item .env.example .env`) et remplacez les deux valeurs vides par celles de votre projet.
-5. Dans **Authentication → Providers → Email**, activez Email. Si la confirmation par e-mail est activée, l’utilisateur doit confirmer son adresse avant de se connecter. Vous pouvez la désactiver pour les essais.
+### Mode démo local (par défaut)
 
-Les deux variables `EXPO_PUBLIC_*` sont intégrées à l’application cliente : seule une clé publique/anon/publishable peut y être mise. **N’utilisez jamais une clé `service_role` ou `sb_secret_...`**. La clé `service_role` contourne les politiques RLS et ne doit exister que dans un environnement serveur sécurisé.
+Aucune configuration Supabase n’est requise. Vous pouvez lancer l’interface immédiatement :
 
-## 3. Lancer
 ```bash
-npx expo start -c
+npm run dev
 ```
-Scannez le QR code avec Expo Go ou ouvrez le serveur web avec `npm run web`. Après toute modification de `.env`, redémarrez Expo avec `npx expo start -c`.
-La carte native (react-native-maps) fonctionne sur Android/iOS ; le web affiche une liste de positions.
-Pour un build Android autonome, une clé Google Maps est requise (`android.config.googleMaps.apiKey` dans app.json) ; Expo Go n'en a pas besoin.
 
-## Données et accès
-Les signalements sont visibles par les utilisateurs authentifiés pour alimenter la carte collective. Seul leur auteur peut modifier ou supprimer un signalement. Les photos sont stockées dans le bucket public `report-photos` (leurs URL sont donc accessibles à toute personne qui les connaît) ; l’envoi et la suppression sont limités au dossier de l’utilisateur. Les statuts disponibles sont `pending`, `in_progress` et `resolved`.
+Le mode démo propose l’inscription, la connexion, les signalements, la carte, le tableau de bord et l’historique, avec des données conservées dans le `localStorage` du navigateur. Les comptes sont propres à ce navigateur. Les photos sont facultatives en démo et limitées à 500 Ko.
 
-## Structure
-`app/` routes (auth, tabs, report/[id]) · `components/` · `services/` Supabase · `hooks/` · `constants/` · `types/` · `supabase/schema.sql` · `assets/`
+### Mode production avec Supabase
+
+Copiez `.env.example` vers `.env`, définissez `VITE_APP_MODE=production`, puis renseignez les valeurs fournies par votre projet Supabase :
+
+```dotenv
+VITE_APP_MODE=production
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon-ou-publishable-key>
+GEMINI_API_KEY=
+```
+
+Seules l’URL Supabase et la clé publique anon/publishable sont destinées au client. N’utilisez jamais de clé `service_role`, `sb_secret_*` ou de clé Gemini dans une variable `VITE_*`. `GEMINI_API_KEY` est facultative et reste côté serveur.
+
+Vérifiez que l’URL utilise `https://` et que la clé est la clé publique **anon** ou **publishable** (les clés anon JWT historiques et `sb_publishable_*` sont prises en charge). Vite refuse de démarrer ou de construire le client si `VITE_SUPABASE_ANON_KEY` contient une clé `service_role` ou `sb_secret_*`.
+
+Dans le SQL Editor Supabase, exécutez `supabase/schema.sql`, puis `supabase/seed.sql`. Activez l’authentification par e-mail dans les paramètres Supabase. Le schéma crée les politiques RLS et le bucket public `report-photos` (lecture publique des images, dépôt limité au dossier de l’utilisateur). Attribuez les rôles `AGENT` et `ADMIN` de manière contrôlée dans la base ; ne permettez pas aux utilisateurs de s’attribuer eux-mêmes un rôle.
+
+En production, les variables Supabase sont obligatoires pour l’authentification et les données. Le projet refuse toute clé secrète dans les variables client.
+
+Pour revenir en mode démo, définissez `VITE_APP_MODE=demo` dans `.env` (ou supprimez la variable), puis redémarrez Vite. Les données de démo ne sont jamais envoyées vers Supabase.
+
+## Développement
+
+```bash
+npm run dev
+```
+
+Ouvrez http://localhost:3000. Le serveur fournit le frontend Vite et l’API Gemini, lorsqu’elle est configurée.
+
+## Vérification et production
+
+```bash
+npm run typecheck
+npm run build
+npm start
+```
+
+`npm start` sert le build de production sur le port `3000` (ou la valeur de `PORT`). Le serveur API vérifie l’authentification Supabase avant de transmettre une photo à Gemini. Les rapports et images restent stockés dans Supabase.

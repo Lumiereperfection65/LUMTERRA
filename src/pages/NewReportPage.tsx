@@ -2,14 +2,25 @@ import React, { useEffect, useState } from 'react';
 import { ReportForm } from '@/components/ReportForm';
 import { supabase } from '@/lib/supabase';
 import { Info, ShieldCheck, Zap } from 'lucide-react';
+import { isDemoMode } from '@/lib/appMode';
+import { demoCategories } from '@/lib/demoStore';
 
 export function NewReportPage() {
   const [categories, setCategories] = useState<any[]>([]);
 
   useEffect(() => {
+    if (isDemoMode) {
+      setCategories(demoCategories);
+      return;
+    }
     async function fetchCategories() {
-      const { data } = await supabase.from('categories').select('*');
-      setCategories(data || []);
+      if (!supabase) return;
+      const { data, error } = await supabase.from('categories').select('*');
+      if (error) {
+        console.error('Unable to load report categories:', error);
+        return;
+      }
+      setCategories(data);
     }
     fetchCategories();
   }, []);
@@ -29,10 +40,11 @@ export function NewReportPage() {
           <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mb-4">
             <Zap size={24} />
           </div>
-          <h3 className="font-bold text-lg mb-2">Analyse Intelligente</h3>
+          <h3 className="font-bold text-lg mb-2">{isDemoMode ? 'Mode démonstration' : 'Analyse Intelligente'}</h3>
           <p className="text-emerald-100 text-sm leading-relaxed">
-            Notre IA analyse votre photo en temps réel pour pré-remplir les détails, 
-            identifier la catégorie et évaluer la gravité du problème.
+            {isDemoMode
+              ? 'Les signalements sont enregistrés localement dans ce navigateur. Aucune connexion Supabase n’est requise.'
+              : 'Notre IA analyse votre photo en temps réel pour pré-remplir les détails, identifier la catégorie et évaluer la gravité du problème.'}
           </p>
         </div>
 
@@ -55,7 +67,9 @@ export function NewReportPage() {
             <div>
               <h4 className="text-sm font-bold text-slate-900">Suivi garanti</h4>
               <p className="text-xs text-slate-500 mt-1">
-                Chaque signalement est transmis aux services compétents et vous serez notifié de son évolution.
+                {isDemoMode
+                  ? 'Les signalements de démonstration sont conservés dans le navigateur.'
+                  : 'Chaque signalement est transmis aux services compétents et vous serez notifié de son évolution.'}
               </p>
             </div>
           </div>

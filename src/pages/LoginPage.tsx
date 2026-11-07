@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseConfigError } from '@/lib/supabase';
+import { isDemoMode } from '@/lib/appMode';
 import { Mail, Lock, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const { signIn } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -13,19 +16,18 @@ export function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isDemoMode && !supabase) {
+      setError(supabaseConfigError);
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) throw error;
+      await signIn(email, password);
       navigate('/');
-    } catch (err: any) {
-      setError(err.message || 'Une erreur est survenue lors de la connexion.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Une erreur est survenue lors de la connexion.');
     } finally {
       setLoading(false);
     }
@@ -34,16 +36,9 @@ export function LoginPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="flex justify-center">
-          <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
-            <span className="text-slate-900 text-2xl font-black">L</span>
-          </div>
-        </div>
-        <h2 className="mt-6 text-center text-3xl font-bold tracking-tight text-slate-900">
-          LUMTERRA
-        </h2>
+        <img src="/lumterra-logo.png" alt="LUMTERRA — Terre de lumière" className="mx-auto w-56 max-w-full object-contain" />
         <p className="mt-2 text-center text-sm text-slate-600">
-          Améliorez votre territoire dès aujourd'hui
+          {isDemoMode ? 'Mode démonstration local' : "Améliorez votre territoire dès aujourd'hui"}
         </p>
       </div>
 

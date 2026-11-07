@@ -7,18 +7,23 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
+import type { Database } from '@/types/supabase';
+import { isDemoMode } from '@/lib/appMode';
+import { saveDemoReport } from '@/lib/demoStore';
 
 const reportSchema = z.object({
   title: z.string().min(5, 'Le titre doit faire au moins 5 caractères'),
   category_id: z.string().min(1, 'La catégorie est requise'),
   description: z.string().min(10, 'La description doit faire au moins 10 caractères'),
-  latitude: z.number(),
-  longitude: z.number(),
+  latitude: z.number().refine((value) => value !== 0, 'Récupérez votre position GPS'),
+  longitude: z.number().refine((value) => value !== 0, 'Récupérez votre position GPS'),
 });
 
 type ReportFormValues = z.infer<typeof reportSchema>;
+type Category = Database['public']['Tables']['categories']['Row'];
 
-export function ReportForm({ categories }: { categories: any[] }) {
+export function ReportForm({ categories }: { categories: Category[] }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -30,20 +35,28 @@ export function ReportForm({ categories }: { categories: any[] }) {
   const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<ReportFormValues>({
     resolver: zodResolver(reportSchema),
     defaultValues: {
-      latitude: 0,
-      longitude: 0,
+      latitude: isDemoMode ? -4.2634 : 0,
+      longitude: isDemoMode ? 15.2429 : 0,
     }
   });
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!file.type.startsWith('image/')) {
+        toast.error('Veuillez sélectionner un fichier image.');
+        return;
+      }
+      if (isDemoMode && file.size > 500_000) {
+        toast.error('En mode démo, choisissez une photo de moins de 500 Ko pour le stockage local.');
+        return;
+      }
       setImage(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64 = reader.result as string;
         setPreview(base64);
-        analyzeImage(base64);
+        if (!isDemoMode) void analyzeImage(base64);
       };
       reader.readAsDataURL(file);
     }
@@ -52,21 +65,42 @@ export function ReportForm({ categories }: { categories: any[] }) {
   const analyzeImage = async (base64: string) => {
     setAiAnalyzing(true);
     try {
+      if (!supabase) {
+        throw new Error('Supabase n’est pas configuré.');
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Connectez-vous pour utiliser l’analyse de photo.');
+      }
       const response = await fetch('/api/analyze-report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({ imageBase64: base64 }),
       });
-      const data = await response.json();
+      if (!response.ok) {
+        const result = await response.json() as { error?: string };
+        throw new Error(result.error || 'L’analyse de la photo a échoué.');
+      }
+      const data = await response.json() as {
+        problem?: string;
+        category?: string;
+        summary?: string;
+      };
       if (data.problem) {
         setValue('title', data.problem);
-        setValue('description', data.summary);
+        if (data.summary) setValue('description', data.summary);
         // Find matching category
-        const matchedCat = categories.find(c => c.name.toLowerCase().includes(data.category.toLowerCase()));
+        const matchedCat = data.category
+          ? categories.find(c => c.name.toLowerCase().includes(data.category!.toLowerCase()))
+          : undefined;
         if (matchedCat) setValue('category_id', matchedCat.id);
       }
     } catch (err) {
       console.error('AI Analysis failed:', err);
+      toast.error(err instanceof Error ? err.message : 'L’analyse de la photo a échoué.');
     } finally {
       setAiAnalyzing(false);
     }
@@ -85,34 +119,88 @@ export function ReportForm({ categories }: { categories: any[] }) {
         setLocationError(null);
       },
       (error) => {
-        setLocationError("Impossible de récupérer votre position.");
+        setLocationError(`Impossible de récupérer votre position : ${error.message}`);
       }
     );
   };
 
   const onSubmit = async (values: ReportFormValues) => {
-    if (!image) return alert('Une photo est requise pour le signalement.');
+    if (!user) {
+      toast.error('Connectez-vous pour envoyer un signalement.');
+      return;
+    }
+    if (!image && !isDemoMode) {
+      toast.error('Une photo est requise pour le signalement.');
+      return;
+    }
+    if (values.latitude === 0 && values.longitude === 0) {
+      toast.error('Récupérez votre position GPS avant de continuer.');
+      return;
+    }
     setLoading(true);
 
+    if (isDemoMode) {
+      try {
+        saveDemoReport({
+          userId: user.id,
+          title: values.title,
+          description: values.description,
+          categoryId: values.category_id,
+          latitude: values.latitude,
+          longitude: values.longitude,
+          photoUrl: preview ?? undefined,
+        });
+        toast.success('Signalement ajouté au mode démo local.');
+        navigate('/history');
+      } catch (error) {
+        console.error('Unable to save demo report:', error);
+        toast.error(error instanceof Error ? error.message : 'Impossible d’enregistrer le signalement local.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (!supabase) {
+      toast.error('Supabase n’est pas configuré.');
+      setLoading(false);
+      return;
+    }
+
+    if (!image) {
+      toast.error('Une photo est requise pour le signalement.');
+      setLoading(false);
+      return;
+    }
+
+    if (!supabase) {
+      toast.error('Supabase n’est pas configuré.');
+      setLoading(false);
+      return;
+    }
+
+    let uploadedFileName: string | null = null;
+    let reportId: string | null = null;
     try {
       // 1. Upload Image
-      const fileExt = image.name.split('.').pop();
-      const fileName = `${user?.id}/${Date.now()}.${fileExt}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const fileExt = image.name.split('.').pop()?.replace(/[^a-zA-Z0-9]/g, '') || 'image';
+      const fileName = `${user.id}/${crypto.randomUUID()}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage
         .from('report-photos')
-        .upload(fileName, image);
+        .upload(fileName, image, { contentType: image.type, upsert: false });
 
       if (uploadError) throw uploadError;
+      uploadedFileName = fileName;
 
       const { data: { publicUrl } } = supabase.storage
         .from('report-photos')
         .getPublicUrl(fileName);
 
       // 2. Create Report
-      const { data: report, error: reportError } = await (supabase
-        .from('reports') as any)
+      const { data: report, error: reportError } = await supabase
+        .from('reports')
         .insert({
-          user_id: user?.id,
+          user_id: user.id,
           category_id: values.category_id,
           title: values.title,
           description: values.description,
@@ -125,18 +213,36 @@ export function ReportForm({ categories }: { categories: any[] }) {
         .single();
 
       if (reportError) throw reportError;
+      reportId = report.id;
 
       // 3. Add Image Entry
-      await (supabase.from('report_images') as any).insert({
-        report_id: (report as any).id,
+      const { error: imageError } = await supabase.from('report_images').insert({
+        report_id: report.id,
         storage_path: fileName,
         url: publicUrl,
         is_primary: true
       });
+      if (imageError) throw imageError;
 
+      toast.success('Votre signalement a été envoyé.');
       navigate('/history');
-    } catch (err: any) {
-      alert(err.message || "Erreur lors de l'envoi du signalement.");
+    } catch (err: unknown) {
+      console.error('Report submission failed:', err);
+      if (reportId) {
+        const { error: cleanupError } = await supabase.from('reports').delete().eq('id', reportId);
+        if (cleanupError) {
+          console.error('Unable to roll back incomplete report:', cleanupError);
+          toast.error('Le signalement est incomplet et n’a pas pu être annulé. Contactez un administrateur.');
+        }
+      }
+      if (uploadedFileName) {
+        const { error: cleanupError } = await supabase.storage.from('report-photos').remove([uploadedFileName]);
+        if (cleanupError) {
+          console.error('Unable to remove uploaded report photo:', cleanupError);
+          toast.error('La photo téléversée n’a pas pu être supprimée.');
+        }
+      }
+      toast.error(err instanceof Error ? err.message : "Erreur lors de l'envoi du signalement.");
     } finally {
       setLoading(false);
     }
@@ -171,7 +277,9 @@ export function ReportForm({ categories }: { categories: any[] }) {
                   <Camera size={24} />
                 </div>
                 <p className="text-sm text-slate-500 font-medium">Cliquez pour ajouter une photo</p>
-                <p className="text-xs text-slate-400 mt-1">L'IA analysera automatiquement l'image</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {isDemoMode ? 'Photo facultative, conservée dans ce navigateur' : "L'IA analysera automatiquement l'image"}
+                </p>
               </>
             )}
           </div>

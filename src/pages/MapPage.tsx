@@ -3,6 +3,9 @@ import { ReportMap } from '@/components/ReportMap';
 import { supabase } from '@/lib/supabase';
 import { Filter, Search, Map as MapIcon, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
+import { isDemoMode } from '@/lib/appMode';
+import { getDemoReports } from '@/lib/demoStore';
 
 export function MapPage() {
   const [reports, setReports] = useState<any[]>([]);
@@ -10,11 +13,24 @@ export function MapPage() {
 
   useEffect(() => {
     async function fetchReports() {
-      const { data } = await supabase
+      if (isDemoMode) {
+        setReports(getDemoReports());
+        setLoading(false);
+        return;
+      }
+      if (!supabase) {
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase
         .from('reports')
         .select('*, categories(name)');
-      
-      setReports(data || []);
+      if (error) {
+        console.error('Unable to load reports for the map:', error);
+        toast.error('Impossible de charger les signalements sur la carte.');
+      } else {
+        setReports(data);
+      }
       setLoading(false);
     }
     fetchReports();

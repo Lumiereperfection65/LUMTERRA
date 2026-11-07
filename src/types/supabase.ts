@@ -39,7 +39,8 @@ export interface Database {
           avatar_url?: string | null
           created_at?: string
           updated_at?: string
-        }
+        },
+        Relationships: []
       }
       categories: {
         Row: {
@@ -68,7 +69,8 @@ export interface Database {
           icon_name?: string | null
           color_hex?: string | null
           created_at?: string
-        }
+        },
+        Relationships: []
       }
       reports: {
         Row: {
@@ -118,7 +120,23 @@ export interface Database {
           ai_analysis?: Json
           created_at?: string
           updated_at?: string
-        }
+        },
+        Relationships: [
+          {
+            foreignKeyName: 'reports_category_id_fkey'
+            columns: ['category_id']
+            isOneToOne: false
+            referencedRelation: 'categories'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'reports_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          }
+        ]
       }
       report_images: {
         Row: {
@@ -144,8 +162,76 @@ export interface Database {
           url?: string
           is_primary?: boolean
           created_at?: string
+        },
+        Relationships: [
+          {
+            foreignKeyName: 'report_images_report_id_fkey'
+            columns: ['report_id']
+            isOneToOne: false
+            referencedRelation: 'reports'
+            referencedColumns: ['id']
+          }
+        ]
+      },
+      interventions: {
+        Row: {
+          id: string
+          report_id: string
+          agent_id: string
+          description: string | null
+          proof_url: string | null
+          started_at: string | null
+          completed_at: string | null
+          created_at: string
+          updated_at: string
         }
+        Insert: {
+          id?: string
+          report_id: string
+          agent_id: string
+          description?: string | null
+          proof_url?: string | null
+          started_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          report_id?: string
+          agent_id?: string
+          description?: string | null
+          proof_url?: string | null
+          started_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'interventions_report_id_fkey'
+            columns: ['report_id']
+            isOneToOne: false
+            referencedRelation: 'reports'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'interventions_agent_id_fkey'
+            columns: ['agent_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          }
+        ]
       }
-    }
+    },
+    Views: Record<string, never>,
+    Functions: Record<string, never>,
+    Enums: {
+      user_role: 'CITOYEN' | 'AGENT' | 'ADMIN'
+      report_status: 'PENDING' | 'VALIDATED' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'REJECTED'
+      report_severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    },
+    CompositeTypes: Record<string, never>
   }
 }

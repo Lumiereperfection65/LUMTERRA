@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { profile, signOut, isAdmin, isAgent } = useAuth();
@@ -39,8 +40,13 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   });
 
   const handleSignOut = async () => {
-    await signOut();
-    navigate('/login');
+    try {
+      await signOut();
+      navigate('/login');
+    } catch (error) {
+      console.error('Unable to sign out:', error);
+      toast.error('Impossible de vous déconnecter. Réessayez.');
+    }
   };
 
   return (
@@ -60,12 +66,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       )}>
         <div className="h-full flex flex-col">
           {/* Logo */}
-          <div className="p-6 flex items-center justify-between">
-            <Link to="/" className="text-xl font-bold tracking-tight flex items-center gap-2">
-              <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
-                <span className="text-slate-900 font-black">L</span>
-              </div>
-              LUMTERRA
+          <div className="p-4 flex items-center justify-between gap-2">
+            <Link to="/" aria-label="LUMTERRA — accueil" className="block min-w-0 overflow-hidden rounded-xl bg-white">
+              <img src="/lumterra-logo.png" alt="LUMTERRA — Terre de lumière" className="block w-full max-w-[190px] object-contain" />
             </Link>
             <button className="lg:hidden" onClick={() => setSidebarOpen(false)}>
               <X size={20} />

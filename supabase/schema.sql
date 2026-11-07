@@ -6,9 +6,18 @@ create extension if not exists "pgcrypto";
 create extension if not exists "postgis";
 
 -- 2. Énumérations
-create type user_role as enum ('CITOYEN', 'AGENT', 'ADMIN');
-create type report_status as enum ('PENDING', 'VALIDATED', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED');
-create type report_severity as enum ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL');
+do $$ begin
+  create type public.user_role as enum ('CITOYEN', 'AGENT', 'ADMIN');
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  create type public.report_status as enum ('PENDING', 'VALIDATED', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED');
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  create type public.report_severity as enum ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL');
+exception when duplicate_object then null;
+end $$;
 
 -- 3. Profils utilisateurs
 create table if not exists public.profiles (
@@ -118,9 +127,35 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists reports_updated_at on public.reports;
 create trigger reports_updated_at before update on public.reports for each row execute function public.handle_updated_at();
+drop trigger if exists profiles_updated_at on public.profiles;
 create trigger profiles_updated_at before update on public.profiles for each row execute function public.handle_updated_at();
+drop trigger if exists interventions_updated_at on public.interventions;
 create trigger interventions_updated_at before update on public.interventions for each row execute function public.handle_updated_at();
+
+create or replace function public.log_report_status_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    insert into public.report_history (report_id, user_id, new_status)
+    values (new.id, (select auth.uid()), new.status);
+  elsif new.status is distinct from old.status then
+    insert into public.report_history (report_id, user_id, previous_status, new_status)
+    values (new.id, (select auth.uid()), old.status, new.status);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists reports_status_history on public.reports;
+create trigger reports_status_history
+  after insert or update of status on public.reports
+  for each row execute function public.log_report_status_change();
 
 -- Création automatique du profil après inscription Auth
 create or replace function public.handle_new_user()
@@ -130,11 +165,33 @@ begin
   values (new.id, new.email, new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'avatar_url');
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer set search_path = '';
 
+drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- Rôle courant lu hors RLS pour éviter la récursion dans les politiques.
+create or replace function public.current_user_role()
+returns public.user_role
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select role from public.profiles where id = (select auth.uid())
+$$;
+
+grant execute on function public.current_user_role() to authenticated;
+
+-- Stockage public en lecture, avec écriture réservée au dossier de l'utilisateur.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('report-photos', 'report-photos', true, 8388608, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
 
 -- --- Row Level Security (RLS) ---
 
@@ -147,30 +204,112 @@ alter table public.interventions enable row level security;
 alter table public.notifications enable row level security;
 alter table public.territorial_zones enable row level security;
 
--- Profiles: chacun voit son profil, admins voient tout
-create policy "Public profiles are viewable by everyone." on public.profiles for select using (true);
-create policy "Users can update own profile." on public.profiles for update using (auth.uid() = id);
+-- Profiles: seuls le propriétaire et les agents/admins peuvent lire les données personnelles.
+drop policy if exists "Public profiles are viewable by everyone." on public.profiles;
+drop policy if exists "Users can view own or managed profiles." on public.profiles;
+create policy "Users can view own or managed profiles." on public.profiles for select
+using (auth.uid() = id or public.current_user_role() in ('AGENT', 'ADMIN'));
+drop policy if exists "Users can update own profile." on public.profiles;
+drop policy if exists "Users can update own profile without changing role." on public.profiles;
+create policy "Users can update own profile without changing role." on public.profiles for update
+using (auth.uid() = id)
+with check (auth.uid() = id and role = public.current_user_role());
 
 -- Categories: lecture publique, modif admin
+drop policy if exists "Categories are viewable by everyone." on public.categories;
 create policy "Categories are viewable by everyone." on public.categories for select using (true);
 
 -- Reports: lecture publique, insertion citoyen, modif agent/admin
+drop policy if exists "Reports are viewable by everyone." on public.reports;
 create policy "Reports are viewable by everyone." on public.reports for select using (true);
-create policy "Citizens can insert reports." on public.reports for insert with check (auth.role() = 'authenticated');
-create policy "Authors can update their pending reports." on public.reports for update using (auth.uid() = user_id and status = 'PENDING');
-create policy "Agents and Admins can update any report." on public.reports for update using (
-  exists (select 1 from public.profiles where id = auth.uid() and role in ('AGENT', 'ADMIN'))
+drop policy if exists "Citizens can insert reports." on public.reports;
+create policy "Citizens can insert reports." on public.reports for insert
+with check (auth.uid() = user_id);
+drop policy if exists "Authors can update their pending reports." on public.reports;
+create policy "Authors can update their pending reports." on public.reports for update
+using (auth.uid() = user_id and status = 'PENDING')
+with check (auth.uid() = user_id and status = 'PENDING');
+drop policy if exists "Agents and Admins can update any report." on public.reports;
+create policy "Agents and Admins can update any report." on public.reports for update
+using (public.current_user_role() in ('AGENT', 'ADMIN'))
+with check (public.current_user_role() in ('AGENT', 'ADMIN'));
+drop policy if exists "Authors can delete their pending reports." on public.reports;
+create policy "Authors can delete their pending reports." on public.reports for delete
+using (
+  (auth.uid() = user_id and status = 'PENDING')
+  or public.current_user_role() in ('AGENT', 'ADMIN')
 );
 
 -- Report Images
+drop policy if exists "Report images are viewable by everyone." on public.report_images;
 create policy "Report images are viewable by everyone." on public.report_images for select using (true);
-create policy "Authenticated users can upload images." on public.report_images for insert with check (auth.role() = 'authenticated');
+drop policy if exists "Authenticated users can upload images." on public.report_images;
+create policy "Report owners and managers can add images." on public.report_images for insert
+with check (
+  exists (
+    select 1 from public.reports
+    where reports.id = report_images.report_id
+      and (reports.user_id = auth.uid() or public.current_user_role() in ('AGENT', 'ADMIN'))
+  )
+);
 
 -- Interventions
+drop policy if exists "Interventions viewable by agents and admins." on public.interventions;
 create policy "Interventions viewable by agents and admins." on public.interventions for select using (
-  exists (select 1 from public.profiles where id = auth.uid() and role in ('AGENT', 'ADMIN'))
+  public.current_user_role() in ('AGENT', 'ADMIN')
+);
+drop policy if exists "Agents and admins can create interventions." on public.interventions;
+create policy "Agents and admins can create interventions." on public.interventions for insert
+with check (
+  public.current_user_role() = 'ADMIN'
+  or (public.current_user_role() = 'AGENT' and agent_id = auth.uid())
+);
+drop policy if exists "Agents and admins can update interventions." on public.interventions;
+create policy "Agents and admins can update interventions." on public.interventions for update
+using (
+  public.current_user_role() = 'ADMIN'
+  or (public.current_user_role() = 'AGENT' and agent_id = auth.uid())
+)
+with check (
+  public.current_user_role() = 'ADMIN'
+  or (public.current_user_role() = 'AGENT' and agent_id = auth.uid())
 );
 
 -- Notifications: seulement le destinataire
+drop policy if exists "Users can view own notifications." on public.notifications;
 create policy "Users can view own notifications." on public.notifications for select using (auth.uid() = user_id);
+drop policy if exists "Users can update own notifications." on public.notifications;
 create policy "Users can update own notifications." on public.notifications for update using (auth.uid() = user_id);
+drop policy if exists "Users can view own report history." on public.report_history;
+create policy "Users can view own report history." on public.report_history for select
+using (
+  exists (select 1 from public.reports where reports.id = report_history.report_id and reports.user_id = auth.uid())
+  or public.current_user_role() in ('AGENT', 'ADMIN')
+);
+
+-- Les médias restent publiquement accessibles car le bucket est public.
+drop policy if exists "Report photos can be read publicly." on storage.objects;
+create policy "Report photos can be read publicly." on storage.objects for select
+using (bucket_id = 'report-photos');
+drop policy if exists "Users can upload photos to own folder." on storage.objects;
+create policy "Users can upload photos to own folder." on storage.objects for insert
+with check (
+  bucket_id = 'report-photos'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+);
+drop policy if exists "Users can update photos in own folder." on storage.objects;
+create policy "Users can update photos in own folder." on storage.objects for update
+using (
+  bucket_id = 'report-photos'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+)
+with check (
+  bucket_id = 'report-photos'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+);
+drop policy if exists "Users can delete photos in own folder." on storage.objects;
+create policy "Users can delete photos in own folder." on storage.objects for delete
+using (
+  bucket_id = 'report-photos'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+);

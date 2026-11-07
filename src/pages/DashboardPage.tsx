@@ -22,6 +22,9 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatDate, cn } from '@/lib/utils';
+import { toast } from 'sonner';
+import { isDemoMode } from '@/lib/appMode';
+import { getDemoReports } from '@/lib/demoStore';
 
 export function DashboardPage() {
   const [stats, setStats] = useState({
@@ -31,34 +34,55 @@ export function DashboardPage() {
     critical: 0
   });
   const [recentReports, setRecentReports] = useState<any[]>([]);
+  const [dashboardReports, setDashboardReports] = useState<any[]>([]);
 
   useEffect(() => {
     async function fetchData() {
-      const { count: total } = await supabase.from('reports').select('*', { count: 'exact', head: true });
-      const { count: pending } = await supabase.from('reports').select('*', { count: 'exact', head: true }).eq('status', 'PENDING');
-      const { count: resolved } = await supabase.from('reports').select('*', { count: 'exact', head: true }).eq('status', 'RESOLVED');
-      const { count: critical } = await supabase.from('reports').select('*', { count: 'exact', head: true }).eq('severity', 'CRITICAL');
+      if (isDemoMode) {
+        const reports = getDemoReports();
+        setStats({
+          total: reports.length,
+          pending: reports.filter((report) => report.status === 'PENDING').length,
+          resolved: reports.filter((report) => report.status === 'RESOLVED').length,
+          critical: reports.filter((report) => report.severity === 'CRITICAL').length,
+        });
+        setDashboardReports(reports);
+        setRecentReports(reports.slice(0, 5));
+        return;
+      }
+      if (!supabase) return;
+      const [totalResult, pendingResult, resolvedResult, criticalResult, recentResult] = await Promise.all([
+        supabase.from('reports').select('*', { count: 'exact', head: true }),
+        supabase.from('reports').select('*', { count: 'exact', head: true }).eq('status', 'PENDING'),
+        supabase.from('reports').select('*', { count: 'exact', head: true }).eq('status', 'RESOLVED'),
+        supabase.from('reports').select('*', { count: 'exact', head: true }).eq('severity', 'CRITICAL'),
+        supabase
+          .from('reports')
+          .select('*, categories(name)')
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ]);
+      const queryError = [totalResult, pendingResult, resolvedResult, criticalResult, recentResult]
+        .find((result) => result.error)?.error;
+      if (queryError) {
+        console.error('Unable to load dashboard data:', queryError);
+        toast.error('Certaines données du tableau de bord n’ont pas pu être chargées.');
+      }
 
       setStats({
-        total: total || 0,
-        pending: pending || 0,
-        resolved: resolved || 0,
-        critical: critical || 0
+        total: totalResult.count || 0,
+        pending: pendingResult.count || 0,
+        resolved: resolvedResult.count || 0,
+        critical: criticalResult.count || 0
       });
 
-      const { data } = await supabase
-        .from('reports')
-        .select('*, categories(name)')
-        .order('created_at', { ascending: false })
-        .limit(5);
-      
-      setRecentReports(data || []);
+      setRecentReports(recentResult.data || []);
     }
 
     fetchData();
   }, []);
 
-  const chartData = [
+  const sampleChartData = [
     { name: 'Lun', value: 12 },
     { name: 'Mar', value: 19 },
     { name: 'Mer', value: 15 },
@@ -68,12 +92,38 @@ export function DashboardPage() {
     { name: 'Dim', value: 18 },
   ];
 
-  const pieData = [
+  const samplePieData = [
     { name: 'Voirie', value: 400 },
     { name: 'Déchets', value: 300 },
     { name: 'Éclairage', value: 300 },
     { name: 'Espaces Verts', value: 200 },
   ];
+
+  const chartData = isDemoMode
+    ? Array.from({ length: 7 }, (_, index) => {
+      const day = new Date();
+      day.setHours(0, 0, 0, 0);
+      day.setDate(day.getDate() - (6 - index));
+      return {
+        name: new Intl.DateTimeFormat('fr-FR', { weekday: 'short' }).format(day),
+        value: dashboardReports.filter((report) => {
+          const createdAt = new Date(report.created_at);
+          return createdAt.getFullYear() === day.getFullYear() &&
+            createdAt.getMonth() === day.getMonth() &&
+            createdAt.getDate() === day.getDate();
+        }).length,
+      };
+    })
+    : sampleChartData;
+
+  const demoCategories = dashboardReports.reduce<Record<string, number>>((totals, report) => {
+    const categoryName = report.categories?.name ?? 'Autres';
+    totals[categoryName] = (totals[categoryName] ?? 0) + 1;
+    return totals;
+  }, {});
+  const pieData = isDemoMode
+    ? Object.entries(demoCategories).map(([name, value]) => ({ name, value }))
+    : samplePieData;
 
   const COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#EF4444'];
 

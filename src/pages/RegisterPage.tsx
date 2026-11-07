@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseConfigError } from '@/lib/supabase';
+import { isDemoMode } from '@/lib/appMode';
 import { Mail, Lock, User, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function RegisterPage() {
   const navigate = useNavigate();
+  const { signUp } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -16,26 +19,21 @@ export function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isDemoMode && !supabase) {
+      setError(supabaseConfigError);
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
-      const { error } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          data: {
-            full_name: formData.full_name,
-            role: 'CITOYEN',
-          }
-        }
-      });
-
-      if (error) throw error;
-      alert('Inscription réussie ! Veuillez vérifier votre e-mail.');
+      await signUp(formData.email, formData.password, formData.full_name);
+      alert(isDemoMode
+        ? 'Compte de démonstration créé. Vous pouvez vous connecter.'
+        : 'Inscription réussie ! Veuillez vérifier votre e-mail.');
       navigate('/login');
-    } catch (err: any) {
-      setError(err.message || "Erreur lors de l'inscription.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Erreur lors de l'inscription.");
     } finally {
       setLoading(false);
     }
@@ -44,11 +42,7 @@ export function RegisterPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="flex justify-center">
-          <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
-            <span className="text-slate-900 text-2xl font-black">L</span>
-          </div>
-        </div>
+        <img src="/lumterra-logo.png" alt="LUMTERRA — Terre de lumière" className="mx-auto w-56 max-w-full object-contain" />
         <h2 className="mt-6 text-center text-3xl font-bold tracking-tight text-slate-900">
           Créer un compte
         </h2>
@@ -110,10 +104,11 @@ export function RegisterPage() {
                 <input
                   type="password"
                   required
+                  minLength={8}
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm"
-                  placeholder="••••••••"
+                  placeholder="8 caractères minimum"
                 />
               </div>
             </div>

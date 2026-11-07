@@ -3,6 +3,13 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDate, cn } from '@/lib/utils';
 import { MapPin, Clock, CheckCircle2, AlertCircle, Eye, Search, Filter } from 'lucide-react';
+import { isDemoMode } from '@/lib/appMode';
+import { getDemoReports, updateDemoReportStatus } from '@/lib/demoStore';
+import { toast } from 'sonner';
+import type { Database } from '@/types/supabase';
+
+type ReportStatus = Database['public']['Tables']['reports']['Row']['status'];
+const reportStatuses: ReportStatus[] = ['PENDING', 'VALIDATED', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED'];
 
 export function HistoryPage() {
   const { user } = useAuth();
@@ -12,19 +19,42 @@ export function HistoryPage() {
 
   useEffect(() => {
     async function fetchReports() {
-      if (!user) return;
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+      if (isDemoMode) {
+        setReports(getDemoReports(user.id));
+        setLoading(false);
+        return;
+      }
+      if (!supabase) {
+        setLoading(false);
+        return;
+      }
       const { data, error } = await supabase
         .from('reports')
         .select('*, categories(name, color_hex)')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) console.error(error);
+      if (error) console.error('Unable to load report history:', error);
       setReports(data || []);
       setLoading(false);
     }
     fetchReports();
   }, [user]);
+
+  const changeDemoStatus = (reportId: string, status: ReportStatus) => {
+    try {
+      const updatedReport = updateDemoReportStatus(reportId, status);
+      setReports((current) => current.map((report) => report.id === reportId ? updatedReport : report));
+      toast.success('Statut de démonstration mis à jour.');
+    } catch (error) {
+      console.error('Unable to update local demo report:', error);
+      toast.error(error instanceof Error ? error.message : 'Le statut ne peut pas être modifié.');
+    }
+  };
 
   const filteredReports = reports.filter(r => 
     r.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -85,7 +115,16 @@ export function HistoryPage() {
                     <span className="text-sm text-slate-500 tabular-nums">{formatDate(report.created_at)}</span>
                   </td>
                   <td className="px-6 py-4">
-                    <StatusBadge status={report.status} />
+                    {isDemoMode ? (
+                      <select
+                        aria-label={`Statut de ${report.title}`}
+                        value={report.status}
+                        onChange={(event) => changeDemoStatus(report.id, event.target.value as ReportStatus)}
+                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                      >
+                        {reportStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    ) : <StatusBadge status={report.status} />}
                   </td>
                   <td className="px-6 py-4 text-right">
                     <button className="p-2 text-slate-400 hover:text-emerald-600 transition-colors">

@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "User Profile",
+      "description": "Stores user profile information.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "The unique identifier for the user." },
+        "full_name": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id"]
+    },
+    "Report": {
+      "title": "Community Report",
+      "description": "A report submitted by a citizen.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "user_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 50 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "photo_url": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "resolved"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "title", "category", "latitude", "longitude", "status", "created_at", "updated_at"]
+    }
+  },
+  "firestore": {
+    "profiles/{userId}": {
+      "schema": "Profile",
+      "description": "User profiles collection."
+    },
+    "reports/{reportId}": {
+      "schema": "Report",
+      "description": "Citizen reports collection."
+    }
+  }
+}
